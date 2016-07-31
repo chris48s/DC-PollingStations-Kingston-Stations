@@ -1,24 +1,45 @@
-# This is a template for a Python scraper on morph.io (https://morph.io)
-# including some code snippets below that you should find helpful
+import geojson
+import json
+import os
+import urllib.request
 
-# import scraperwiki
-# import lxml.html
-#
-# # Read in a page
-# html = scraperwiki.scrape("http://foo.com")
-#
-# # Find something on the page using css selectors
-# root = lxml.html.fromstring(html)
-# root.cssselect("div[align='left']")
-#
-# # Write out to the sqlite database using scraperwiki library
-# scraperwiki.sqlite.save(unique_keys=['name'], data={"name": "susan", "occupation": "software developer"})
-#
-# # An arbitrary query against the database
-# scraperwiki.sql.select("* from data where 'name'='peter'")
+# hack to override sqlite database filename
+# see: https://help.morph.io/t/using-python-3-with-morph-scraperwiki-fork/148
+os.environ['SCRAPERWIKI_DATABASE_NAME'] = 'sqlite:///data.sqlite'
+import scraperwiki
 
-# You don't have to do things with the ScraperWiki and lxml libraries.
-# You can use whatever libraries you want: https://morph.io/documentation/python
-# All that matters is that your final data is written to an SQLite database
-# called "data.sqlite" in the current working directory which has at least a table
-# called "data".
+
+url = "http://www6.kingston.gov.uk/ArcGISServer/rest/services/polling/polling_Districts_Stations/MapServer/0/query?geometry=&geometryType=esriGeometryPoint&inSR=&spatialRel=esriSpatialRelIntersects&relationParam=&objectIds=&where=OBJECTID+LIKE+%27%25%27&time=&returnCountOnly=false&returnIdsOnly=false&returnGeometry=true&maxAllowableOffset=&outSR=&outFields=*&f=pjson"
+uk_grid = geojson.crs.Named(
+    properties={ "name": "urn:ogc:def:crs:EPSG::27700" }
+)
+council_id = 'E09000021'
+
+
+def format_address(in_addr):
+    address_parts = in_addr.split(', ')
+    address_parts = [x.strip() for x in address_parts]
+    postcode = address_parts[-1]
+    postcode = postcode.replace(u'\xa0', u' ')
+    address = "\n".join(address_parts[:-1])
+
+    return (address, postcode)
+
+
+with urllib.request.urlopen(url) as response:
+    data = json.loads(response.read().decode('utf-8'))
+    for feature in data['features']:
+        location = geojson.Point((feature['geometry']['x'], feature['geometry']['y']), crs=uk_grid)
+
+        address, postcode = format_address(feature['attributes']['LOCATION'])
+
+        record = {
+            'internal_council_id': feature['attributes']['ATT2'],
+            'polling_district_id': feature['attributes']['ATT2'],
+            'address': address,
+            'postcode': postcode,
+            'location': geojson.dumps(location),
+            'council_id': council_id
+        }
+
+        scraperwiki.sqlite.save(unique_keys=['internal_council_id'], data=record, table_name='data')
